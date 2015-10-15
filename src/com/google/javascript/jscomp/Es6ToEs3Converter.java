@@ -566,6 +566,32 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
 
     addDeclarations(metadata);
 
+    if (metadata.es6ExtendForPrototype.hasChildren()) {
+      Node definePropsCall =
+          IR.exprResult(
+              IR.call(
+                  NodeUtil.newQName(compiler, "$jscomp.extend"),
+                  NodeUtil.newQName(compiler, metadata.fullClassName + ".prototype"),
+                  metadata.es6ExtendForPrototype));
+      definePropsCall.useSourceInfoIfMissingFromForTree(classNode);
+      metadata.insertNodeAndAdvance(definePropsCall);
+
+      visitObject(metadata.es6ExtendForPrototype);
+    }
+
+    if (metadata.es6ExtendForClass.hasChildren()) {
+      Node definePropsCall =
+          IR.exprResult(
+              IR.call(
+                  NodeUtil.newQName(compiler, "$jscomp.extend"),
+                  NodeUtil.newQName(compiler, metadata.fullClassName),
+                  metadata.es6ExtendForClass));
+      definePropsCall.useSourceInfoIfMissingFromForTree(classNode);
+      metadata.insertNodeAndAdvance(definePropsCall);
+
+      visitObject(metadata.es6ExtendForClass);
+    }
+
     if (metadata.definePropertiesObjForPrototype.hasChildren()) {
       Node definePropsCall =
           IR.exprResult(
@@ -693,41 +719,63 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
    * @param member A getter or setter, or a computed property that is a getter/setter.
    */
   private void addToDefinePropertiesObject(ClassDeclarationMetadata metadata, Node member) {
-    Node obj =
-        member.isStaticMember()
-            ? metadata.definePropertiesObjForClass
-            : metadata.definePropertiesObjForPrototype;
-    Node prop =
-        member.isComputedProp()
-            ? NodeUtil.getFirstComputedPropMatchingKey(obj, member.getFirstChild())
-            : NodeUtil.getFirstPropMatchingKey(obj, member.getString());
-    if (prop == null) {
-      prop =
-          IR.objectlit(
-              IR.stringKey("configurable", IR.trueNode()),
-              IR.stringKey("enumerable", IR.trueNode()));
-      if (member.isComputedProp()) {
-        obj.addChildToBack(IR.computedProp(member.getFirstChild().cloneTree(), prop));
-      } else {
-        obj.addChildToBack(IR.stringKey(member.getString(), prop));
+    if (member.isComputedProp()) {
+      Node obj =
+          member.isStaticMember()
+              ? metadata.definePropertiesObjForClass
+              : metadata.definePropertiesObjForPrototype;
+      Node prop = NodeUtil.getFirstComputedPropMatchingKey(obj, member.getFirstChild());
+      if (prop == null) {
+        prop =
+            IR.objectlit(
+                IR.stringKey("configurable", IR.trueNode()),
+                IR.stringKey("enumerable", IR.trueNode()));
+        if (member.isComputedProp()) {
+          obj.addChildToBack(IR.computedProp(member.getFirstChild().cloneTree(), prop));
+        } else {
+          obj.addChildToBack(IR.stringKey(member.getString(), prop));
+        }
       }
-    }
 
+      Node function = member.getLastChild();
+      JSDocInfoBuilder info = JSDocInfoBuilder.maybeCopyFrom(
+          NodeUtil.getBestJSDocInfo(function));
+
+      info.recordThisType(new JSTypeExpression(new Node(
+          Token.BANG, IR.string(metadata.fullClassName)), member.getSourceFileName()));
+      Node stringKey =
+          IR.stringKey(
+              (member.isGetterDef() || member.getBooleanProp(Node.COMPUTED_PROP_GETTER))
+                  ? "get"
+                  : "set",
+              function.detachFromParent());
+      stringKey.setJSDocInfo(info.build());
+      prop.addChildToBack(stringKey);
+      prop.useSourceInfoIfMissingFromForTree(member);
+    } else {
+      addToEs6ExtendPropertiesObject(metadata, member);
+    }
+  }
+
+  private void addToEs6ExtendPropertiesObject(ClassDeclarationMetadata metadata, Node member) {
+    Node obj = member.isStaticMember()
+        ? metadata.es6ExtendForClass
+        : metadata.es6ExtendForPrototype;
+    // ComputedProp is currently not support FIXME
     Node function = member.getLastChild();
+    // JSDoc FIXME
     JSDocInfoBuilder info = JSDocInfoBuilder.maybeCopyFrom(
         NodeUtil.getBestJSDocInfo(function));
 
     info.recordThisType(new JSTypeExpression(new Node(
         Token.BANG, IR.string(metadata.fullClassName)), member.getSourceFileName()));
-    Node stringKey =
-        IR.stringKey(
-            (member.isGetterDef() || member.getBooleanProp(Node.COMPUTED_PROP_GETTER))
-                ? "get"
-                : "set",
-            function.detachFromParent());
+    Node stringKey = Node.newString(
+        (member.isGetterDef() || member.getBooleanProp(Node.COMPUTED_PROP_GETTER))
+        ? Token.GETTER_DEF
+        : Token.SETTER_DEF, member.getString());
+    stringKey.addChildToFront(function.detachFromParent());
     stringKey.setJSDocInfo(info.build());
-    prop.addChildToBack(stringKey);
-    prop.useSourceInfoIfMissingFromForTree(member);
+    obj.addChildToBack(stringKey);
   }
 
   private void visitComputedPropInClass(Node member, ClassDeclarationMetadata metadata) {
@@ -945,6 +993,9 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
      */
     private final Node definePropertiesObjForPrototype;
 
+    private final Node es6ExtendForPrototype;
+    private final Node es6ExtendForClass;
+
     /**
      * An object literal node that will be used in a call to Object.defineProperties, to add getters
      * and setters to the class.
@@ -975,6 +1026,8 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
       this.insertionPoint = insertionPoint;
       this.definePropertiesObjForClass = IR.objectlit();
       this.definePropertiesObjForPrototype = IR.objectlit();
+      this.es6ExtendForPrototype = IR.objectlit();
+      this.es6ExtendForClass = IR.objectlit();
       this.prototypeMembersToDeclare = new LinkedHashMap<>();
       this.prototypeComputedPropsToDeclare = new LinkedHashMap<>();
       this.classMembersToDeclare = new LinkedHashMap<>();

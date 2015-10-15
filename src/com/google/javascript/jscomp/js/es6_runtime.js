@@ -211,3 +211,53 @@ $jscomp.inherits = function(childCtor, parentCtor) {
     }
   }
 };
+
+
+$jscomp.PROTOTYPE_FIELDS_ = [
+  'constructor',
+  'hasOwnProperty',
+  'isPrototypeOf',
+  'propertyIsEnumerable',
+  'toLocaleString',
+  'toString',
+  'valueOf'
+];
+
+
+/**
+ * from goog.object.extend in closure-library
+ * @see https://github.com/google/closure-library/blob/09305d09423d857b9962335da76edcdf583895de/closure/goog/object/object.js#L585
+ *
+ * @param {Object} target The object to modify. Existing properties will be
+ *     overwritten if they are also present in one of the objects in
+ *     {@code var_args}.
+ * @param {...Object} var_args The objects from which values will be copied.
+ */
+$jscomp.extend = function(target, var_args) {
+  var supportDefineProperty = Object.defineProperty && Object.getOwnPropertyDescriptor;
+  var key, source;
+  for (var i = 1; i < arguments.length; i++) {
+    source = arguments[i];
+    for (key in source) {
+      if (supportDefineProperty) {
+        Object.defineProperty(
+            target, key, Object.getOwnPropertyDescriptor(source, key));
+      } else {
+        target[key] = source[key];
+      }
+    }
+
+    // For IE the for-in-loop does not contain any properties that are not
+    // enumerable on the prototype object (for example isPrototypeOf from
+    // Object.prototype) and it will also not include 'replace' on objects that
+    // extend String and change 'replace' (not that it is common for anyone to
+    // extend anything except Object).
+
+    for (var j = 0; j < $jscomp.PROTOTYPE_FIELDS_.length; j++) {
+      key = $jscomp.PROTOTYPE_FIELDS_[j];
+      if (Object.prototype.hasOwnProperty.call(source, key)) {
+        target[key] = source[key];
+      }
+    }
+  }
+};
